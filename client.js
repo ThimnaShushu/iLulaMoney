@@ -13,4 +13,10 @@ client.connect(PORT, HOST, () =>{
     const sendWallet = "$ilp.interledger-test.dev/thimzar";
     const receiverWallet = "$ilp.interledger-test.dev/thimusd";
     const amountMoney = "300";
+
+    const dataToSend = `${sendWallet} ${receiverWallet} ${amountMoney}`;
+    client.write(dataToSend);
+
+    console.log(`Sent to server: ${dataToSend}`);
+
 })
