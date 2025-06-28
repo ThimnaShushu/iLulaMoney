@@ -9,6 +9,8 @@ import {
   createOutgoingPaymentPendingGrant,
   getWalletAddressInfo,
   processSubscriptionPayment,
+  makePayment,
+  getSenderWalletAddress,
 } from "./open-payments.js";
 
 // Initialize express app
@@ -44,6 +46,96 @@ app.get("/api/health", (req, res) => {
 });
 
 // ============== ENDPOINTS ==============
+
+// New simplified payment endpoint - only requires receiver address and amount
+app.post("/api/make-payment", async (req, res) => {
+  const { receiverWalletAddress, amount } = req.body;
+
+  if (!receiverWalletAddress || !amount) {
+    return res.status(400).json({
+      error: "Validation failed",
+      message: "Please provide receiverWalletAddress and amount",
+      received: req.body,
+    });
+  }
+
+  try {
+    console.log(`Making payment from ${getSenderWalletAddress()} to ${receiverWalletAddress} for amount ${amount}`);
+    
+    // Initialize Open Payments client
+    const client = await getAuthenticatedClient();
+
+    // Start the complete payment flow
+    const paymentResult = await makePayment(client, receiverWalletAddress, amount);
+
+    return res.status(200).json({ 
+      success: true,
+      data: paymentResult,
+      message: "Payment flow initiated. User authorization required.",
+      authorizationUrl: paymentResult.authorizationUrl
+    });
+  } catch (err) {
+    console.error("Error making payment:", err);
+    return res.status(500).json({ 
+      error: "Failed to initiate payment",
+      message: err.message 
+    });
+  }
+});
+
+// Endpoint to complete payment after user authorization
+app.post("/api/complete-payment", async (req, res) => {
+  const {
+    continueAccessToken,
+    quoteId,
+    interactRef,
+    continueUri,
+  } = req.body;
+
+  if (!continueAccessToken || !quoteId || !interactRef || !continueUri) {
+    return res.status(400).json({
+      error: "Validation failed",
+      message: "Missing required authorization parameters",
+      received: req.body,
+    });
+  }
+
+  try {
+    // Initialize Open Payments client
+    const client = await getAuthenticatedClient();
+
+    // Get sender wallet details
+    const { walletAddressDetails } = await getWalletAddressInfo(
+      client,
+      getSenderWalletAddress()
+    );
+
+    // Complete the outgoing payment
+    const outgoingPaymentResponse = await createOutgoingPayment(
+      client,
+      {
+        senderWalletAddress: getSenderWalletAddress(),
+        continueAccessToken,
+        quoteId,
+        interactRef,
+        continueUri,
+      },
+      walletAddressDetails
+    );
+
+    return res.status(200).json({ 
+      success: true,
+      data: outgoingPaymentResponse,
+      message: "Payment completed successfully!" 
+    });
+  } catch (err) {
+    console.error("Error completing payment:", err);
+    return res.status(500).json({ 
+      error: "Failed to complete payment",
+      message: err.message 
+    });
+  }
+});
 
 app.post("/api/create-incoming-payment", async (req, res) => {
   const { senderWalletAddress, receiverWalletAddress, amount } = req.body;
@@ -82,12 +174,15 @@ app.post("/api/create-incoming-payment", async (req, res) => {
 });
 
 app.post("/api/create-quote", async (req, res) => {
-  const { senderWalletAddress, incomingPaymentUrl } = req.body;
+  const { incomingPaymentUrl } = req.body;
 
-  if (!senderWalletAddress || !incomingPaymentUrl) {
+  // Use hardcoded sender wallet address
+  const senderWalletAddress = getSenderWalletAddress();
+
+  if (!incomingPaymentUrl) {
     return res.status(400).json({
       error: "Validation failed",
-      message: "Please fill in all the required fields",
+      message: "Please provide incomingPaymentUrl",
       received: req.body,
     });
   }
@@ -110,16 +205,15 @@ app.post("/api/create-quote", async (req, res) => {
     );
     return res.status(200).json({ data: quote });
   } catch (err) {
-    console.error("Error creating incoming payment:", err);
+    console.error("Error creating quote:", err);
     return res
       .status(500)
-      .json({ error: "Failed to create incoming payment" });
+      .json({ error: "Failed to create quote" });
   }
 });
 
 app.post("/api/outgoing-payment-auth", async (req, res) => {
   const {
-    senderWalletAddress,
     quoteId,
     debitAmount,
     receiveAmount,
@@ -129,10 +223,13 @@ app.post("/api/outgoing-payment-auth", async (req, res) => {
     duration,
   } = req.body;
 
-  if (!senderWalletAddress || !quoteId) {
+  // Use hardcoded sender wallet address
+  const senderWalletAddress = getSenderWalletAddress();
+
+  if (!quoteId) {
     return res.status(400).json({
       error: "Validation failed",
-      message: "Please fill in all the required fields",
+      message: "Please provide quoteId",
       received: req.body,
     });
   }
@@ -164,26 +261,28 @@ app.post("/api/outgoing-payment-auth", async (req, res) => {
       );
     return res.status(200).json({ data: outgoingPaymentAuthResponse });
   } catch (err) {
-    console.error("Error creating incoming payment:", err);
+    console.error("Error creating outgoing payment auth:", err);
     return res
       .status(500)
-      .json({ error: "Failed to create incoming payment" });
+      .json({ error: "Failed to create outgoing payment authorization" });
   }
 });
 
 app.post("/api/outgoing-payment", async (req, res) => {
   const {
-    senderWalletAddress,
     continueAccessToken,
     quoteId,
     interactRef,
     continueUri,
   } = req.body;
 
-  if (!senderWalletAddress || !quoteId) {
+  // Use hardcoded sender wallet address
+  const senderWalletAddress = getSenderWalletAddress();
+
+  if (!quoteId) {
     return res.status(400).json({
       error: "Validation failed",
-      message: "Please fill in all the required fields",
+      message: "Please provide quoteId",
       received: req.body,
     });
   }
@@ -213,10 +312,10 @@ app.post("/api/outgoing-payment", async (req, res) => {
 
     return res.status(200).json({ data: outgoingPaymentResponse });
   } catch (err) {
-    console.error("Error creating incoming payment:", err);
+    console.error("Error creating outgoing payment:", err);
     return res
       .status(500)
-      .json({ error: "Failed to create incoming payment" });
+      .json({ error: "Failed to create outgoing payment" });
   }
 });
 

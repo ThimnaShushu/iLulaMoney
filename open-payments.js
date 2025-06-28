@@ -7,8 +7,11 @@ import { randomUUID } from "crypto";
 
 dotenv.config({ path: ".env" });
 
+// Hardcoded sender wallet address
+const SENDER_WALLET_ADDRESS = "$ilp.interledger-test.dev/thimzar";
+
 export async function getAuthenticatedClient() {
-  let walletAddress = process.env.OPEN_PAYMENTS_CLIENT_ADDRESS;
+  let walletAddress = process.env.OPEN_PAYMENTS_CLIENT_ADDRESS || SENDER_WALLET_ADDRESS;
 
   if (walletAddress && walletAddress.startsWith("$")) {
     walletAddress = walletAddress.replace("$", "https://");
@@ -21,6 +24,10 @@ export async function getAuthenticatedClient() {
   });
 
   return client;
+}
+
+export function getSenderWalletAddress() {
+  return SENDER_WALLET_ADDRESS;
 }
 
 export async function getWalletAddressInfo(
@@ -274,6 +281,74 @@ export async function createOutgoingPayment(
   console.log(outgoingPayment);
 
   return outgoingPayment;
+}
+
+/**
+ * Complete payment flow from sender to receiver
+ * This function handles the entire payment process
+ *
+ * @param {Object} client
+ * @param {string} receiverWalletAddress - receiver's wallet address
+ * @param {string} amount - payment amount
+ * @returns {Promise<Object>}
+ */
+export async function makePayment(client, receiverWalletAddress, amount) {
+  console.log(">> Starting complete payment flow");
+  console.log(`Sender: ${SENDER_WALLET_ADDRESS}`);
+  console.log(`Receiver: ${receiverWalletAddress}`);
+  console.log(`Amount: ${amount}`);
+
+  try {
+    // Step 1: Get wallet address info for both sender and receiver
+    const { walletAddressDetails: senderWalletDetails } = await getWalletAddressInfo(
+      client,
+      SENDER_WALLET_ADDRESS
+    );
+
+    const { walletAddressDetails: receiverWalletDetails } = await getWalletAddressInfo(
+      client,
+      receiverWalletAddress
+    );
+
+    // Step 2: Create incoming payment on receiver's account
+    const incomingPayment = await createIncomingPayment(
+      client,
+      amount,
+      receiverWalletDetails
+    );
+
+    // Step 3: Create quote on sender's account
+    const quote = await createQuote(
+      client,
+      incomingPayment.id,
+      senderWalletDetails
+    );
+
+    // Step 4: Create outgoing payment grant (this will require user authorization)
+    const outgoingPaymentGrant = await createOutgoingPaymentPendingGrant(
+      client,
+      {
+        quoteId: quote.id,
+        debitAmount: quote.debitAmount,
+        receiveAmount: quote.receiveAmount,
+        redirectUrl: `${process.env.REDIRECT_URL || 'http://localhost:3001'}/payment-complete`,
+      },
+      senderWalletDetails
+    );
+
+    return {
+      incomingPayment,
+      quote,
+      outgoingPaymentGrant,
+      authorizationUrl: outgoingPaymentGrant.interact.redirect,
+      senderWalletDetails,
+      receiverWalletDetails
+    };
+
+  } catch (error) {
+    console.error("Error in payment flow:", error);
+    throw error;
+  }
 }
 
 export async function processSubscriptionPayment(
